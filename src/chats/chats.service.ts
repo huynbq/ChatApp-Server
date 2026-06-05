@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ChatType } from '@prisma/client';
+import { ChatType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { CreateDirectChatDto } from './dto/create-direct-chat.dto';
@@ -13,6 +13,10 @@ import { CreateGroupChatDto } from './dto/create-group-chat.dto';
 @Injectable()
 export class ChatsService {
   private readonly memberCache = new Map<string, number>();
+  private readonly activeMemberIdsCache = new Map<
+    string,
+    { expiresAt: number; userIds: string[] }
+  >();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -142,7 +146,7 @@ export class ChatsService {
     });
 
     const payload = { chatId, member };
-    this.memberCache.delete(this.getMemberCacheKey(chatId, userId));
+    this.clearChatMemberCache(chatId);
     this.realtime.emitToChat(chatId, 'chat.member_added', payload);
     this.realtime.emitToUser(userId, 'chat.member_added', payload);
     return member;
@@ -162,7 +166,7 @@ export class ChatsService {
     });
 
     const payload = { chatId, userId };
-    this.memberCache.delete(this.getMemberCacheKey(chatId, userId));
+    this.clearChatMemberCache(chatId);
     this.realtime.emitToChat(chatId, 'chat.member_removed', payload);
     this.realtime.emitToUser(userId, 'chat.member_removed', payload);
     return member;
@@ -181,6 +185,7 @@ export class ChatsService {
       data: { deletedAt: new Date() },
     });
 
+    this.clearChatMemberCache(chatId);
     this.realtime.emitToChat(chatId, 'chat.deleted', { chatId });
     return deleted;
   }
@@ -199,6 +204,24 @@ export class ChatsService {
     this.realtime.emitToUser(userId, 'chat.read', payload);
 
     return payload;
+  }
+
+  async getActiveMemberIds(chatId: string) {
+    const cached = this.activeMemberIdsCache.get(chatId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.userIds;
+    }
+
+    const members = await this.prisma.chatMember.findMany({
+      where: { chatId, deletedAt: null },
+      select: { userId: true },
+    });
+    const userIds = members.map((member) => member.userId);
+    this.activeMemberIdsCache.set(chatId, {
+      expiresAt: Date.now() + 30_000,
+      userIds,
+    });
+    return userIds;
   }
 
   private getMemberCacheKey(chatId: string, userId: string) {
@@ -224,24 +247,30 @@ export class ChatsService {
     chats: { id: string; members: { userId: string; lastReadAt: Date | null }[] }[],
   ) {
     const unreadCounts = new Map<string, number>();
+    const chatIds = chats.map((chat) => chat.id);
+    if (chatIds.length === 0) return unreadCounts;
 
-    await Promise.all(
-      chats.map(async (chat) => {
-        const currentMember = chat.members.find((member) => member.userId === userId);
-        const count = await this.prisma.message.count({
-          where: {
-            chatId: chat.id,
-            senderId: { not: userId },
-            deletedAt: null,
-            ...(currentMember?.lastReadAt
-              ? { createdAt: { gt: currentMember.lastReadAt } }
-              : {}),
-          },
-        });
-
-        unreadCounts.set(chat.id, count);
-      }),
+    const rows = await this.prisma.$queryRaw<{ chatId: string; count: number }[]>(
+      Prisma.sql`
+        select m.chat_id as "chatId", count(*)::int as "count"
+        from public.messages m
+        join public.chat_members cm
+          on cm.chat_id = m.chat_id
+          and cm.user_id = ${userId}::uuid
+          and cm.deleted_at is null
+        where m.chat_id in (${Prisma.join(
+          chatIds.map((chatId) => Prisma.sql`${chatId}::uuid`),
+        )})
+          and m.sender_id <> ${userId}::uuid
+          and m.deleted_at is null
+          and (cm.last_read_at is null or m.created_at > cm.last_read_at)
+        group by m.chat_id
+      `,
     );
+
+    for (const row of rows) {
+      unreadCounts.set(row.chatId, Number(row.count));
+    }
 
     return unreadCounts;
   }
@@ -258,6 +287,13 @@ export class ChatsService {
   private emitChatCreated(chat: { id: string; members: { userId: string }[] }) {
     for (const member of chat.members) {
       this.realtime.emitToUser(member.userId, 'chat.created', chat);
+    }
+  }
+
+  private clearChatMemberCache(chatId: string) {
+    this.activeMemberIdsCache.delete(chatId);
+    for (const key of this.memberCache.keys()) {
+      if (key.startsWith(`${chatId}:`)) this.memberCache.delete(key);
     }
   }
 }

@@ -104,17 +104,19 @@ export class MessagesService {
     this.emitMentions(formatted, mentionUserIds);
     const emitAt = performance.now();
 
-    console.log(
-      `[timing] POST /chats/${chatId}/messages service assertMember=${(
-        memberAt - startedAt
-      ).toFixed(1)}ms reply=${(replyAt - memberAt).toFixed(
-        1,
-      )}ms mentions=${(mentionsAt - replyAt).toFixed(1)}ms create=${(
-        createAt - mentionsAt
-      ).toFixed(1)}ms emit=${(emitAt - createAt).toFixed(1)}ms total=${(
-        emitAt - startedAt
-      ).toFixed(1)}ms`,
-    );
+    if (process.env.DEBUG_TIMING === 'true') {
+      console.log(
+        `[timing] POST /chats/${chatId}/messages service assertMember=${(
+          memberAt - startedAt
+        ).toFixed(1)}ms reply=${(replyAt - memberAt).toFixed(
+          1,
+        )}ms mentions=${(mentionsAt - replyAt).toFixed(1)}ms create=${(
+          createAt - mentionsAt
+        ).toFixed(1)}ms emit=${(emitAt - createAt).toFixed(1)}ms total=${(
+          emitAt - startedAt
+        ).toFixed(1)}ms`,
+      );
+    }
 
     return formatted;
   }
@@ -243,13 +245,10 @@ export class MessagesService {
   }
 
   private async emitChatListMessageCreated(chatId: string, message: FormattedMessage) {
-    const members = await this.prisma.chatMember.findMany({
-      where: { chatId, deletedAt: null },
-      select: { userId: true },
-    });
+    const memberIds = await this.chats.getActiveMemberIds(chatId);
 
-    for (const member of members) {
-      this.realtime.emitToUser(member.userId, 'chat.message_created', message);
+    for (const memberId of memberIds) {
+      this.realtime.emitToUser(memberId, 'chat.message_created', message);
     }
   }
 

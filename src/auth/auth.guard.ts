@@ -27,15 +27,17 @@ export class AuthGuard implements CanActivate {
     const profileAt = performance.now();
     request.user = user;
 
-    console.log(
-      `[timing] ${request.method} ${request.url} auth.guard token=${(
-        tokenAt - startedAt
-      ).toFixed(1)}ms supabase=${(authAt - tokenAt).toFixed(
-        1,
-      )}ms profile=${(profileAt - authAt).toFixed(1)}ms total=${(
-        profileAt - startedAt
-      ).toFixed(1)}ms`,
-    );
+    if (process.env.DEBUG_TIMING === 'true') {
+      console.log(
+        `[timing] ${request.method} ${request.url} auth.guard token=${(
+          tokenAt - startedAt
+        ).toFixed(1)}ms supabase=${(authAt - tokenAt).toFixed(
+          1,
+        )}ms profile=${(profileAt - authAt).toFixed(1)}ms total=${(
+          profileAt - startedAt
+        ).toFixed(1)}ms`,
+      );
+    }
 
     return true;
   }
