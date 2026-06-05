@@ -1,0 +1,110 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum ChatType {
+  DIRECT
+  GROUP
+
+  @@map("chat_type")
+}
+
+model Profile {
+  id          String       @id @db.Uuid
+  email       String?      @db.Text
+  username    String?      @unique @db.Text
+  displayName String?      @map("display_name") @db.Text
+  avatarUrl   String?      @map("avatar_url") @db.Text
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  chats       Chat[]       @relation("CreatedChats")
+  memberships ChatMember[]
+  messages    Message[]
+  mentions    MessageMention[]
+
+  @@map("profiles")
+}
+
+model Chat {
+  id        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type      ChatType     @default(DIRECT)
+  name      String?      @db.Text
+  createdBy String       @map("created_by") @db.Uuid
+  deletedAt DateTime?    @map("deleted_at") @db.Timestamptz(6)
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  creator   Profile      @relation("CreatedChats", fields: [createdBy], references: [id])
+  members   ChatMember[]
+  messages  Message[]
+
+  @@map("chats")
+}
+
+model ChatMember {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  chatId     String    @map("chat_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz(6)
+  lastReadAt DateTime? @map("last_read_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  chat       Chat      @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user       Profile   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([chatId, userId])
+  @@index([userId])
+  @@map("chat_members")
+}
+
+model Message {
+  id               String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  chatId           String              @map("chat_id") @db.Uuid
+  senderId         String              @map("sender_id") @db.Uuid
+  replyToMessageId String?             @map("reply_to_message_id") @db.Uuid
+  content          String?             @db.Text
+  deletedAt        DateTime?           @map("deleted_at") @db.Timestamptz(6)
+  editedAt         DateTime?           @map("edited_at") @db.Timestamptz(6)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  chat             Chat                @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender           Profile             @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  replyToMessage   Message?            @relation("MessageReplies", fields: [replyToMessageId], references: [id])
+  replies          Message[]           @relation("MessageReplies")
+  attachments      MessageAttachment[]
+  mentions         MessageMention[]
+
+  @@index([chatId, createdAt])
+  @@index([senderId])
+  @@map("messages")
+}
+
+model MessageAttachment {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  messageId String   @map("message_id") @db.Uuid
+  bucket    String   @db.Text
+  path      String   @db.Text
+  mimeType  String   @map("mime_type") @db.Text
+  sizeBytes Int      @map("size_bytes")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@map("message_attachments")
+}
+
+model MessageMention {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  messageId       String   @map("message_id") @db.Uuid
+  mentionedUserId String   @map("mentioned_user_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  message         Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  mentionedUser   Profile  @relation(fields: [mentionedUserId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, mentionedUserId])
+  @@index([mentionedUserId])
+  @@map("message_mentions")
+}
